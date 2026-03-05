@@ -91,15 +91,19 @@ for branch in "${all_branches[@]}"; do
     continue
   fi
 
-  # Heuristic: check if the patch diff is already present in upstream
-  # by attempting a reverse-apply. If it succeeds, the code is already there.
-  patch_diff=$(git diff "upstream/$UPSTREAM_BRANCH" "$branch" -- \
-    2>/dev/null || true)
-  if [[ -n "$patch_diff" ]] && \
-     echo "$patch_diff" | git apply --check --reverse 2>/dev/null; then
-    echo "  SUPERSEDED (changes already in upstream): $branch"
-    superseded+=("$branch")
-    continue
+  # Heuristic: check if the patch's own changes are already in upstream.
+  # Get the diff of what this branch adds on top of its original base,
+  # then test if those changes can be applied (already present) on upstream.
+  merge_base=$(git merge-base "upstream/$UPSTREAM_BRANCH" "$branch" \
+    2>/dev/null || echo "")
+  if [[ -n "$merge_base" ]]; then
+    patch_diff=$(git diff "$merge_base" "$branch" -- 2>/dev/null || true)
+    if [[ -n "$patch_diff" ]] && \
+       echo "$patch_diff" | git apply --check 2>/dev/null; then
+      echo "  SUPERSEDED (changes already in upstream): $branch"
+      superseded+=("$branch")
+      continue
+    fi
   fi
 
   echo "  ACTIVE (${unique_commits} commit(s)): $branch"
