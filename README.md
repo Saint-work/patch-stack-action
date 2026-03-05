@@ -113,8 +113,90 @@ Edit `upstream_repo` and `fork_repo`, commit, push.
 
 Create branches named `patch/<description>` in your fork and open PRs from them against the upstream repo. The automation handles the rest.
 
+## Converting a standard fork to a patch-stack fork
+
+If you already have a fork where you've been making changes directly on `main`, follow these steps to restructure it into a patch stack.
+
+### 1. Identify your changes
+
+List the commits on your fork that are not in upstream:
+
+```bash
+git fetch upstream main
+git log --oneline upstream/main..main
+```
+
+Group related commits into logical patches — each group will become one `patch/*` branch.
+
+### 2. Create patch branches
+
+For each group of changes, create a patch branch based on upstream/main:
+
+```bash
+# Start from upstream
+git checkout upstream/main
+
+# Create a branch for your first patch
+git checkout -b patch/my-feature
+
+# Cherry-pick the relevant commits
+git cherry-pick abc1234 def5678
+
+# Push to your fork
+git push origin patch/my-feature
+```
+
+For dependent patches (changes that build on another patch), use the `--` naming convention:
+
+```bash
+git checkout patch/my-feature
+git checkout -b patch/my-feature--enhancement
+git cherry-pick ghi9012
+git push origin patch/my-feature--enhancement
+```
+
+### 3. Open PRs on upstream
+
+For each patch branch, push it to the upstream repo and create a PR:
+
+```bash
+# Push the branch to upstream
+git push upstream patch/my-feature
+
+# Create the PR
+gh pr create \
+  --repo owner/upstream-repo \
+  --head patch/my-feature \
+  --base main \
+  --title "Add my feature" \
+  --body "Description of the feature..."
+```
+
+### 4. Install the automation
+
+Follow the [Setup](#setup) section above to create a GitHub App, add secrets, and copy the caller workflow into `.github/workflows/patch-stack-sync.yml`.
+
+### 5. Reset fork/main
+
+Once everything is in place, reset your fork's `main` to match the automated output:
+
+```bash
+# Let the workflow do its first run
+gh workflow run patch-stack-sync.yml -f dry_run=true
+
+# Verify the output, then run for real
+gh workflow run patch-stack-sync.yml
+```
+
+After the first successful run, your fork's `main` will be rebuilt as `upstream/main + patches` and future syncs are fully automated.
+
+### Tips
+
+- **One PR per patch branch** — each patch branch should map to exactly one upstream PR
+- **Keep patches independent when possible** — independent patches can be reordered or dropped without affecting each other
+- **Use dependency chains sparingly** — `patch/a--b--c` means all three must succeed; a conflict in `a` blocks `b` and `c`
+- **Write clear PR descriptions** — Claude Code reads these to understand intent when resolving conflicts
+
 ## Notes on Claude Code auth
 
 `claude-code-action` defaults to OIDC token exchange for GitHub auth. This **fails on cron-triggered runs** with a 401. We bypass it by passing the pre-generated App token directly as `github_token` — Claude Code then uses that instead of attempting OIDC. The `ssh_signing_key` is set to the App private key to give Claude full git CLI access for rebasing and force-pushing.
-
-`CLAUDE_CODE_OAUTH_TOKEN` is passed via env (not as an action input) to work around a [bug](https://github.com/anthropics/claude-code-action/issues/676) where `claude-code-action@v1` clears it between phases when provided as an input.
