@@ -1,0 +1,6 @@
+[submodule "test/upstream"]
+	path = test/upstream
+	url = git@github.com:DJRHails/patch-stack-test-upstream.git
+[submodule "test/fork"]
+	path = test/fork
+	url = git@github.com:DJRHails/patch-stack-test-fork.git

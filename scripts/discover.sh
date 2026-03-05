@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Discover patch/* branches and classify them as active, merged, or superseded.
+#
+# Requires env: GH_TOKEN, UPSTREAM_REPO, UPSTREAM_BRANCH, FORK_OWNER
+# Outputs (via GITHUB_OUTPUT): merged_patches, superseded_patches
+# Side effects: writes /tmp/sorted_branches.txt, /tmp/meta_* files
+
+# shellcheck source=lib.sh
+source "$(dirname "$0")/lib.sh"
+
+topo_sort() {
+  # Repeatedly emit branches whose parent has already been emitted
+  local -a remaining=("$@") sorted=()
+  local -a emitted=("upstream/$UPSTREAM_BRANCH")
+  local pass=0 max=$(( ${#remaining[@]} + 1 ))
+  while [[ ${#remaining[@]} -gt 0 && $pass -lt $max ]]; do
+    (( pass++ )) || true
+    local -a next=()
+    for b in "${remaining[@]}"; do
+      local parent
+      parent=$(get_parent "$b")
+      local found=false
+      for e in "${emitted[@]}"; do
+        [[ "$e" == "$parent" ]] && { found=true; break; }
+      done
+      if $found; then
+        sorted+=("$b")
+        emitted+=("$b")
+      else
+        next+=("$b")
+      fi
+    done
+    remaining=("${next[@]+"${next[@]}"}")
+  done
+  # Any remaining have broken deps — append with a warning
+  [[ ${#remaining[@]} -gt 0 ]] && {
+    echo "::warning::Could not resolve parents for: ${remaining[*]}" >&2
+    sorted+=("${remaining[@]}")
+  }
+  printf '%s\n' "${sorted[@]}"
+}
+
+# Collect all patch/* branches present on origin
+mapfile -t all_branches < <(
+  git branch --list 'patch/*' | sed 's/^[* ]*//' | sort
+)
+echo "Found ${#all_branches[@]} patch branch(es): ${all_branches[*]:-none}"
+
+active=() merged=() superseded=()
+
+for branch in "${all_branches[@]}"; do
+  # Look up the open PR for this branch on the upstream repo
+  if ! pr_json=$(gh pr list \
+    --repo "$UPSTREAM_REPO" \
+    --head "${FORK_OWNER}:${branch}" \
+    --state all \
+    --limit 1 \
+    --json number,state,url,title,body \
+    2>/dev/null); then
+    echo "::warning::Could not query PRs on ${UPSTREAM_REPO}" \
+      "(app may not be installed on upstream) — skipping PR metadata for ${branch}"
+    pr_json='[]'
+  fi
+
+  pr_state=$(echo "$pr_json" | jq -r '.[0].state // "NONE"')
+  pr_url=$(echo   "$pr_json" | jq -r '.[0].url   // ""')
+  pr_num=$(echo   "$pr_json" | jq -r '.[0].number // ""')
+  pr_title=$(echo "$pr_json" | jq -r '.[0].title  // ""')
+  pr_body=$(echo  "$pr_json" | jq -r '.[0].body   // ""')
+
+  # Persist metadata for later steps
+  safe="${branch//\//_}"
+  echo "$pr_url"   > "/tmp/meta_url_${safe}"
+  echo "$pr_num"   > "/tmp/meta_num_${safe}"
+  echo "$pr_title" > "/tmp/meta_title_${safe}"
+  printf '%s' "$pr_body" > "/tmp/meta_body_${safe}"
+
+  parent=$(get_parent "$branch")
+  unique_commits=$(git log --oneline "${parent}..${branch}" \
+    2>/dev/null | wc -l | tr -d ' ')
+
+  if [[ "$pr_state" == "MERGED" || "$unique_commits" -eq 0 ]]; then
+    echo "  MERGED/empty: $branch"
+    merged+=("$branch")
+    continue
+  fi
+
+  # Heuristic: check if the patch diff is already present in upstream
+  # by attempting a reverse-apply. If it succeeds, the code is already there.
+  patch_diff=$(git diff "upstream/$UPSTREAM_BRANCH" "$branch" -- \
+    2>/dev/null || true)
+  if [[ -n "$patch_diff" ]] && \
+     echo "$patch_diff" | git apply --check --reverse 2>/dev/null; then
+    echo "  SUPERSEDED (changes already in upstream): $branch"
+    superseded+=("$branch")
+    continue
+  fi
+
+  echo "  ACTIVE (${unique_commits} commit(s)): $branch"
+  active+=("$branch")
+done
+
+# Topologically sort active branches and persist order
+if [[ ${#active[@]} -gt 0 ]]; then
+  topo_sort "${active[@]}" > /tmp/sorted_branches.txt
+else
+  : > /tmp/sorted_branches.txt
+fi
+
+echo "Application order:"
+cat /tmp/sorted_branches.txt || true
+
+# Write outputs
+printf '%s\n' "${merged[@]+"${merged[@]}"}" \
+  | paste -sd ',' - > /tmp/out_merged.txt
+printf '%s\n' "${superseded[@]+"${superseded[@]}"}" \
+  | paste -sd ',' - > /tmp/out_superseded.txt
+{
+  echo "merged_patches=$(cat /tmp/out_merged.txt)"
+  echo "superseded_patches=$(cat /tmp/out_superseded.txt)"
+} >> "$GITHUB_OUTPUT"

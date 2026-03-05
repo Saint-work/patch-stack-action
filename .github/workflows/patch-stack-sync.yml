@@ -1,0 +1,301 @@
+name: Patch Stack Sync
+
+# Reusable workflow — call this from any fork repo.
+# See README.md for full setup instructions.
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: 'Upstream repo (owner/repo)'
+        required: true
+        type: string
+      upstream_branch:
+        description: 'Upstream branch to track'
+        required: false
+        default: 'main'
+      fork_repo:
+        description: 'Fork repo (owner/repo)'
+        required: true
+        type: string
+      fork_main:
+        description: 'Fork branch to rebuild'
+        required: false
+        default: 'main'
+      dry_run:
+        description: 'Dry run — no pushes or PR mutations'
+        type: boolean
+        default: false
+
+  workflow_call:
+    inputs:
+      upstream_repo:
+        description: 'Upstream repo in owner/repo format (e.g. vercel-labs/agent-browser)'
+        required: true
+        type: string
+      upstream_branch:
+        description: 'Upstream branch to track'
+        required: false
+        type: string
+        default: 'main'
+      fork_repo:
+        description: 'Fork repo in owner/repo format (e.g. djrhails/agent-browser)'
+        required: true
+        type: string
+      fork_main:
+        description: 'Fork branch to keep rebuilt as upstream + patches'
+        required: false
+        type: string
+        default: 'main'
+      dry_run:
+        description: 'If true, skip all pushes and PR mutations'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      app_id:
+        description: 'GitHub App ID (for generating a token with cross-repo PR write access)'
+        required: true
+      app_private_key:
+        description: 'GitHub App private key'
+        required: true
+      claude_code_oauth_token:
+        description: 'Claude Code OAuth token (Pro/Max subscription). Generate with: claude setup-token'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # ── Auth ──────────────────────────────────────────────────────────────
+      # Use a GitHub App token rather than GITHUB_TOKEN or OIDC so that:
+      # 1. Pushes made here can trigger other workflows (GITHUB_TOKEN can't)
+      # 2. We can close/comment on PRs in the upstream repo (cross-repo)
+      # 3. Cron jobs work — OIDC token exchange fails on scheduled runs
+      #    (see https://github.com/anthropics/claude-code-action/issues/814)
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          # Token scope is determined by the app's installation —
+          # the app must be installed on both the fork and upstream orgs.
+
+      # ── Checkout ──────────────────────────────────────────────────────────
+      # Full history needed for rebase and cherry-pick operations.
+      # persist-credentials: false prevents the token from being stored in
+      # .git/config — we configure authenticated remotes explicitly below.
+      - name: Checkout fork
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          repository: ${{ inputs.fork_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout patch-stack-action scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          repository: DJRHails/patch-stack-action
+          path: .patch-stack-action
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Configure git identity and origin auth
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          FORK_REPO: ${{ inputs.fork_repo }}
+        run: |
+          set -euo pipefail
+          git config user.name  "patch-stack-bot[bot]"
+          git config user.email "patch-stack-bot[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${FORK_REPO}.git"
+
+      # ── Fetch upstream ────────────────────────────────────────────────────
+      - name: Add upstream remote and fetch all patch branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+        run: |
+          set -euo pipefail
+          git remote add upstream \
+            "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git" \
+            2>/dev/null || git remote set-url upstream \
+            "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git"
+
+          git fetch upstream "$UPSTREAM_BRANCH" --quiet
+          # Fetch all patch/* branches from origin into local tracking branches
+          git fetch origin '+refs/heads/patch/*:refs/heads/patch/*' --quiet 2>/dev/null || true
+
+      # ── Discover patches ──────────────────────────────────────────────────
+      - name: Discover patch branches and check upstream status
+        id: discover
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          FORK_OWNER: ${{ github.repository_owner }}
+        run: bash .patch-stack-action/scripts/discover.sh
+
+      # ── Handle merged patches ─────────────────────────────────────────────
+      - name: Delete merged patch branches
+        if: steps.discover.outputs.merged_patches != ''
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          MERGED_PATCHES: ${{ steps.discover.outputs.merged_patches }}
+        run: bash .patch-stack-action/scripts/cleanup-merged.sh
+
+      # ── Handle superseded patches ─────────────────────────────────────────
+      # Close the upstream PR and rename branch patch/* -> archived/*
+      - name: Close and archive superseded patches
+        if: steps.discover.outputs.superseded_patches != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SUPERSEDED_PATCHES: ${{ steps.discover.outputs.superseded_patches }}
+        run: bash .patch-stack-action/scripts/cleanup-superseded.sh
+
+      # ── Rebase each patch branch ──────────────────────────────────────────
+      - name: Rebase patch branches onto their parents
+        id: rebase
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          FORK_MAIN: ${{ inputs.fork_main }}
+        run: bash .patch-stack-action/scripts/rebase.sh
+
+      # ── Claude Code conflict resolution ───────────────────────────────────
+      # Only runs when rebase produced conflicts.
+      # Pass the App token as github_token so OIDC exchange is bypassed entirely
+      # — this is the fix for cron-triggered runs failing auth.
+      #
+      # CLAUDE_CODE_OAUTH_TOKEN is passed via env (not as an action input) to work
+      # around a bug where claude-code-action@v1 clears it between the prepare and
+      # execution phases when provided as an input:
+      # https://github.com/anthropics/claude-code-action/issues/676
+      - name: Resolve conflicts and rebuild with Claude Code
+        if: steps.rebase.outputs.needs_claude == 'true' && inputs.dry_run == false
+        uses: anthropics/claude-code-action@1fc90f3ed982521116d8ff6d85b948c9b12cae3e  # v1.0.69
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.claude_code_oauth_token }}
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          # SSH signing gives Claude full git CLI access (rebase, force-push, etc.)
+          ssh_signing_key: ${{ secrets.app_private_key }}
+          claude_args: --max-turns 80
+          prompt: |
+            You are maintaining a patch stack fork of ${{ inputs.upstream_repo }}.
+
+            This fork's `${{ inputs.fork_main }}` branch is always kept as:
+              upstream/${{ inputs.upstream_branch }} + all active patch branches applied in order
+
+            Each patch branch is named `patch/<n>` or `patch/<parent>--<child>` where
+            `--` encodes a dependency (child rebases onto parent, not directly onto upstream).
+
+            The previous steps already:
+            - Fetched upstream/${{ inputs.upstream_branch }}
+            - Attempted to rebase each patch branch onto its parent
+            - Pushed branches that rebased cleanly
+            - Identified branches with conflicts, written to /tmp/conflicts.json
+
+            /tmp/conflicts.json contains an array of objects:
+            {
+              "branch":            "patch/foo--bar",
+              "parent":            "patch/foo",
+              "conflicting_files": ["src/index.ts"],
+              "pr_url":            "https://github.com/.../pull/42",
+              "pr_title":          "Add bar feature",
+              "pr_body":           "..."  // full PR description
+            }
+
+            /tmp/sorted_branches.txt contains ALL active patch branches in topological
+            order (one per line) — use this for rebuilding ${{ inputs.fork_main }}.
+
+            ## Your task
+
+            For each entry in /tmp/conflicts.json:
+
+            1. Read the PR title and body carefully to understand INTENT of the patch.
+            2. Check what changed in upstream that caused the conflict:
+               `git log --oneline upstream/${{ inputs.upstream_branch }} -20`
+               `git diff <parent> upstream/${{ inputs.upstream_branch }} -- <conflicting_files>`
+            3. DECISION: Has upstream already addressed the same problem?
+               - If YES (equivalent fix landed upstream): close the PR and archive the branch
+                 a. `gh pr comment <number> --repo ${{ inputs.upstream_repo }} --body "..."`
+                    (may fail if app is not installed on upstream — log a warning and continue)
+                 b. `gh pr close <number> --repo ${{ inputs.upstream_repo }}`
+                    (may fail if app is not installed on upstream — log a warning and continue)
+                 c. `git push origin <branch>:refs/heads/archived/<suffix>`
+                 d. `git push origin --delete <branch>`
+                 e. Remove the branch from /tmp/sorted_branches.txt
+               - If NO (genuine conflict, both changes should coexist):
+                 a. `git checkout <branch>`
+                 b. `git rebase <parent>` — conflict markers will appear
+                 c. Resolve each file: preserve upstream's approach, adapt patch on top
+                    when in doubt. Use the PR description as the source of truth for intent.
+                 d. `git add <resolved files>`
+                 e. `git rebase --continue`  (repeat c–e if multi-commit rebase)
+                 f. `git push --force-with-lease origin <branch>`
+
+            After handling all conflicts:
+
+            4. Rebuild ${{ inputs.fork_main }} using squash merges (one commit per patch):
+               a. `git checkout ${{ inputs.fork_main }}`
+               b. `git reset --hard upstream/${{ inputs.upstream_branch }}`
+               c. For each branch in /tmp/sorted_branches.txt (skip archived ones):
+                  - `git merge --squash <branch>`
+                  - If clean: `git commit -m "<pr_title> (#<pr_num>)\n\nUpstream PR: <pr_url>"`
+                  - If conflict: resolve files, `git add`, then commit with the same message format
+               d. `git push --force origin ${{ inputs.fork_main }}`
+
+            5. Write a markdown summary to /tmp/claude_summary.md:
+               - Branches resolved cleanly (list)
+               - Branches closed as superseded (list + reason)
+               - Any remaining issues
+
+      # ── Summary ───────────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          FORK_REPO: ${{ inputs.fork_repo }}
+          FORK_MAIN: ${{ inputs.fork_main }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MERGED_PATCHES: ${{ steps.discover.outputs.merged_patches }}
+          SUPERSEDED_PATCHES: ${{ steps.discover.outputs.superseded_patches }}
+          NEEDS_CLAUDE: ${{ steps.rebase.outputs.needs_claude }}
+        run: bash .patch-stack-action/scripts/summary.sh
+
+      # ── Cleanup ─────────────────────────────────────────────────────────
+      # Revoke the App installation token so it can't be reused if leaked.
+      # Runs even on failure — mirrors claude-code-action's cleanup pattern.
+      - name: Revoke App token
+        if: always()
+        shell: bash
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          curl --silent --fail-with-body \
+            -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${APP_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/installation/token" \
+            || true
