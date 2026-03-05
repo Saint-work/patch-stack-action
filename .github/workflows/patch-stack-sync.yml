@@ -82,8 +82,10 @@ jobs:
         with:
           app-id: ${{ secrets.app_id }}
           private-key: ${{ secrets.app_private_key }}
-          # Token scope is determined by the app's installation —
-          # the app must be installed on both the fork and upstream orgs.
+          # Scope the token to all repos the app can access under this owner.
+          # Without this, the token is scoped only to the workflow's repo and
+          # cannot fetch from or push to the upstream repo.
+          owner: ${{ github.repository_owner }}
 
       # ── Checkout ──────────────────────────────────────────────────────────
       # Full history needed for rebase and cherry-pick operations.
