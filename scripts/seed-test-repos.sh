@@ -65,14 +65,13 @@ fi
 
 echo "-- Step 1: Seeding upstream repo --"
 cd "$WORK_DIR"
-git clone "git@github.com:${UPSTREAM_REPO}.git" upstream --quiet
-cd upstream
+mkdir upstream && cd upstream
+git init -b main --quiet
+git remote add origin "git@github.com:${UPSTREAM_REPO}.git"
 
-git config user.name "seed-script"
-git config user.email "seed@test.local"
+git config user.name "upstream-dev"
+git config user.email "upstream-dev@test.local"
 
-# Wipe existing content (keep .git)
-git rm -rf . --quiet 2>/dev/null || true
 mkdir -p src docs
 
 cat > src/index.ts << 'SRCEOF'
@@ -186,14 +185,15 @@ echo "  Upstream base: $BASE_SHA"
 echo ""
 echo "-- Step 2: Mirroring content to fork --"
 cd "$WORK_DIR"
-git clone "git@github.com:${FORK_REPO}.git" fork --quiet
-cd fork
-
-git config user.name "seed-script"
-git config user.email "seed@test.local"
-
-# Reset fork to match upstream exactly
+mkdir fork && cd fork
+git init -b main --quiet
+git remote add origin "git@github.com:${FORK_REPO}.git"
 git remote add upstream "git@github.com:${UPSTREAM_REPO}.git"
+
+git config user.name "patch-author"
+git config user.email "patch-author@test.local"
+
+# Pull upstream's fresh main (single commit)
 git fetch upstream main --quiet
 git reset --hard upstream/main
 git push --force origin main --quiet
@@ -573,10 +573,9 @@ else
   echo "    No open PR found for patch/already-merged"
 fi
 
-# 5b: Pull the merge, then add conflicting + superseding commits
+# 5b: Fetch the merge, then add conflicting + superseding commits
 git fetch origin main --quiet
-git checkout main --quiet
-git pull origin main --quiet
+git reset --hard origin/main
 
 # Conflict: change config.ts on same lines as patch/fix-config
 cat > src/config.ts << 'SRCEOF'
@@ -647,8 +646,6 @@ echo "  Upstream main pushed"
 echo ""
 echo "-- Step 6: Installing caller workflow on fork --"
 cd "$WORK_DIR/fork"
-git checkout main --quiet
-git pull origin main --quiet 2>/dev/null || true
 # Reset to upstream (which now has the evolved main)
 git fetch upstream main --quiet
 git reset --hard upstream/main
