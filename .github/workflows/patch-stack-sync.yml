@@ -182,6 +182,7 @@ jobs:
           # SSH signing gives Claude full git CLI access (rebase, force-push, etc.)
           ssh_signing_key: ${{ secrets.app_private_key }}
           claude_args: --max-turns 80
+          show_full_output: true
           prompt: |
             You are maintaining a patch stack fork of ${{ inputs.upstream_repo }}.
 
