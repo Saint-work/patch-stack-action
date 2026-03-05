@@ -199,4 +199,4 @@ After the first successful run, your fork's `main` will be rebuilt as `upstream/
 
 ## Notes on Claude Code auth
 
-`claude-code-action` defaults to OIDC token exchange for GitHub auth. This **fails on cron-triggered runs** with a 401. We bypass it by passing the pre-generated App token directly as `github_token` — Claude Code then uses that instead of attempting OIDC. The `ssh_signing_key` is set to the App private key to give Claude full git CLI access for rebasing and force-pushing.
+`claude-code-action` defaults to OIDC token exchange for GitHub auth. This **fails on cron-triggered runs** with a 401. We bypass it by passing the pre-generated App token directly as `github_token` — Claude Code then uses that instead of attempting OIDC.

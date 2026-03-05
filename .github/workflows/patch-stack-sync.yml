@@ -71,21 +71,44 @@ jobs:
     timeout-minutes: 60
     steps:
       # ── Auth ──────────────────────────────────────────────────────────────
-      # Use a GitHub App token rather than GITHUB_TOKEN or OIDC so that:
+      # Use a GitHub App token for fork access rather than GITHUB_TOKEN or OIDC so that:
       # 1. Pushes made here can trigger other workflows (GITHUB_TOKEN can't)
-      # 2. We can close/comment on PRs in the upstream repo (cross-repo)
+      # 2. We can fetch/push the fork even when it is private
       # 3. Cron jobs work — OIDC token exchange fails on scheduled runs
       #    (see https://github.com/anthropics/claude-code-action/issues/814)
-      - name: Generate GitHub App token
-        id: app-token
+      - name: Parse repository coordinates
+        id: repos
+        shell: bash
+        env:
+          FORK_REPO: ${{ inputs.fork_repo }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        run: |
+          set -euo pipefail
+          {
+            echo "fork_owner=${FORK_REPO%%/*}"
+            echo "fork_name=${FORK_REPO#*/}"
+            echo "upstream_owner=${UPSTREAM_REPO%%/*}"
+            echo "upstream_name=${UPSTREAM_REPO#*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate fork GitHub App token
+        id: fork-token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
         with:
           app-id: ${{ secrets.app_id }}
           private-key: ${{ secrets.app_private_key }}
-          # Scope the token to all repos the app can access under this owner.
-          # Without this, the token is scoped only to the workflow's repo and
-          # cannot fetch from or push to the upstream repo.
-          owner: ${{ github.repository_owner }}
+          owner: ${{ steps.repos.outputs.fork_owner }}
+          repositories: ${{ steps.repos.outputs.fork_name }}
+
+      - name: Generate upstream GitHub App token
+        id: upstream-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ steps.repos.outputs.upstream_owner }}
+          repositories: ${{ steps.repos.outputs.upstream_name }}
 
       # ── Checkout ──────────────────────────────────────────────────────────
       # Full history needed for rebase and cherry-pick operations.
@@ -95,7 +118,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           repository: ${{ inputs.fork_repo }}
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.fork-token.outputs.token }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -103,6 +126,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           repository: DJRHails/patch-stack-action
+          ref: ${{ github.workflow_sha }}
           path: .patch-stack-action
           sparse-checkout: scripts
           persist-credentials: false
@@ -110,7 +134,7 @@ jobs:
       - name: Configure git identity and origin auth
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.fork-token.outputs.token }}
           FORK_REPO: ${{ inputs.fork_repo }}
         run: |
           set -euo pipefail
@@ -123,15 +147,21 @@ jobs:
       - name: Add upstream remote and fetch all patch branches
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          UPSTREAM_GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
         run: |
           set -euo pipefail
-          git remote add upstream \
-            "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git" \
-            2>/dev/null || git remote set-url upstream \
-            "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git"
+
+          if [[ -n "${UPSTREAM_GH_TOKEN}" ]]; then
+            upstream_url="https://x-access-token:${UPSTREAM_GH_TOKEN}@github.com/${UPSTREAM_REPO}.git"
+          else
+            upstream_url="https://github.com/${UPSTREAM_REPO}.git"
+            echo "::notice::No upstream app installation detected; using anonymous fetch for ${UPSTREAM_REPO}"
+          fi
+
+          git remote add upstream "${upstream_url}" 2>/dev/null \
+            || git remote set-url upstream "${upstream_url}"
 
           git fetch upstream "$UPSTREAM_BRANCH" --quiet
           # Fetch all patch/* branches from origin into local tracking branches
@@ -142,10 +172,10 @@ jobs:
         id: discover
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
-          FORK_OWNER: ${{ github.repository_owner }}
+          FORK_OWNER: ${{ steps.repos.outputs.fork_owner }}
         run: bash .patch-stack-action/scripts/discover.sh
 
       # ── Handle merged patches ─────────────────────────────────────────────
@@ -154,8 +184,20 @@ jobs:
         shell: bash
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ steps.fork-token.outputs.token }}
+          FORK_REPO: ${{ inputs.fork_repo }}
           MERGED_PATCHES: ${{ steps.discover.outputs.merged_patches }}
         run: bash .patch-stack-action/scripts/cleanup-merged.sh
+
+      - name: Refresh patch metadata after cleanup
+        if: steps.discover.outputs.merged_patches != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          FORK_OWNER: ${{ steps.repos.outputs.fork_owner }}
+        run: bash .patch-stack-action/scripts/discover.sh
 
 
       # ── Rebase each patch branch ──────────────────────────────────────────
@@ -163,7 +205,6 @@ jobs:
         id: rebase
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DRY_RUN: ${{ inputs.dry_run }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
           FORK_MAIN: ${{ inputs.fork_main }}
@@ -176,11 +217,11 @@ jobs:
       - name: Resolve conflicts and rebuild with Claude Code
         if: steps.rebase.outputs.needs_claude == 'true' && inputs.dry_run == false
         uses: anthropics/claude-code-action@1fc90f3ed982521116d8ff6d85b948c9b12cae3e  # v1.0.69
+        env:
+          UPSTREAM_GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
         with:
-          github_token: ${{ steps.app-token.outputs.token }}
+          github_token: ${{ steps.fork-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
-          # SSH signing gives Claude full git CLI access (rebase, force-push, etc.)
-          ssh_signing_key: ${{ secrets.app_private_key }}
           claude_args: --max-turns 80
           show_full_output: true
           # Allow Claude to run git/gh commands, read/write files for conflict
@@ -200,6 +241,7 @@ jobs:
             - Attempted to rebase each patch branch onto its parent
             - Pushed branches that rebased cleanly
             - Identified branches with conflicts, written to /tmp/conflicts.json
+            - Exported UPSTREAM_GH_TOKEN when the app is installed on the upstream repo
 
             /tmp/conflicts.json contains an array of objects:
             {
@@ -235,14 +277,16 @@ jobs:
 
                **SUPERSEDED** — upstream has fully accomplished the PR's goal:
                  a. Identify the upstream commit(s) that accomplished the goal.
-                 b. `gh pr comment <number> --repo ${{ inputs.upstream_repo }} --body "..."`
+                 b. If `UPSTREAM_GH_TOKEN` is set, run:
+                    `env GH_TOKEN="$UPSTREAM_GH_TOKEN" gh pr comment <number> --repo ${{ inputs.upstream_repo }} --body "..."`
                     Include the upstream commit SHA(s) that supersede this PR.
-                    (may fail if app is not installed on upstream — log a warning and continue)
-                 b. `gh pr close <number> --repo ${{ inputs.upstream_repo }}`
-                    (may fail if app is not installed on upstream — log a warning and continue)
-                 c. `git push origin <branch>:refs/heads/archived/<suffix>`
-                 d. `git push origin --delete <branch>`
-                 e. Remove the branch from /tmp/sorted_branches.txt
+                    If `UPSTREAM_GH_TOKEN` is unset or the command fails, log a warning and continue.
+                 c. If `UPSTREAM_GH_TOKEN` is set, run:
+                    `env GH_TOKEN="$UPSTREAM_GH_TOKEN" gh pr close <number> --repo ${{ inputs.upstream_repo }}`
+                    If `UPSTREAM_GH_TOKEN` is unset or the command fails, log a warning and continue.
+                 d. `git push origin <branch>:refs/heads/archived/<suffix>`
+                 e. `git push origin --delete <branch>`
+                 f. Remove the branch from /tmp/sorted_branches.txt
 
                **RESOLVE** — genuine conflict, both changes should coexist:
                  a. `git checkout <branch>`
@@ -295,12 +339,16 @@ jobs:
         if: always()
         shell: bash
         env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          FORK_APP_TOKEN: ${{ steps.fork-token.outputs.token }}
+          UPSTREAM_APP_TOKEN: ${{ steps.upstream-token.outputs.token }}
         run: |
-          curl --silent --fail-with-body \
-            -X DELETE \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${APP_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL:-https://api.github.com}/installation/token" \
-            || true
+          for token in "${FORK_APP_TOKEN}" "${UPSTREAM_APP_TOKEN}"; do
+            [[ -z "${token}" ]] && continue
+            curl --silent --fail-with-body \
+              -X DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${token}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL:-https://api.github.com}/installation/token" \
+              || true
+          done
