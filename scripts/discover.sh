@@ -99,7 +99,7 @@ for branch in "${all_branches[@]}"; do
   if [[ -n "$merge_base" ]]; then
     patch_diff=$(git diff "$merge_base" "$branch" -- 2>/dev/null || true)
     if [[ -n "$patch_diff" ]] && \
-       echo "$patch_diff" | git apply --check 2>/dev/null; then
+       echo "$patch_diff" | git apply --check --reverse 2>/dev/null; then
       echo "  SUPERSEDED (changes already in upstream): $branch"
       superseded+=("$branch")
       continue
