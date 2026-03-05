@@ -155,9 +155,13 @@ while IFS= read -r branch || [[ -n "$branch" ]]; do
   fi
 done < /tmp/sorted_branches.txt
 
+# Always collect preserved commits before rebuilding (Claude needs them too)
+if [[ "$DRY_RUN" != "true" ]]; then
+  collect_preserved_main_commits
+fi
+
 # If no conflicts, rebuild fork/main now (Claude will do it otherwise)
 if ! $needs_claude && [[ "$DRY_RUN" != "true" ]]; then
-  collect_preserved_main_commits
   echo ""
   echo "-- Rebuilding $FORK_MAIN (preserved commits + squash per patch) --"
   git checkout "$FORK_MAIN" --quiet
