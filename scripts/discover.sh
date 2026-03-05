@@ -49,17 +49,23 @@ echo "Found ${#all_branches[@]} patch branch(es): ${all_branches[*]:-none}"
 active=() merged=() superseded=()
 
 for branch in "${all_branches[@]}"; do
-  # Look up the open PR for this branch on the upstream repo
-  if ! pr_json=$(gh pr list \
-    --repo "$UPSTREAM_REPO" \
-    --head "${FORK_OWNER}:${branch}" \
-    --state all \
-    --limit 1 \
-    --json number,state,url,title,body \
-    2>/dev/null); then
-    echo "::warning::Could not query PRs on ${UPSTREAM_REPO}" \
-      "(app may not be installed on upstream) — skipping PR metadata for ${branch}"
-    pr_json='[]'
+  # Look up the PR for this branch on the upstream repo.
+  # Try cross-fork format (owner:branch) first, then same-repo (branch only).
+  pr_json='[]'
+  for head_ref in "${FORK_OWNER}:${branch}" "${branch}"; do
+    if candidate=$(gh pr list \
+      --repo "$UPSTREAM_REPO" \
+      --head "$head_ref" \
+      --state all \
+      --limit 1 \
+      --json number,state,url,title,body \
+      2>/dev/null) && [[ "$(echo "$candidate" | jq 'length')" -gt 0 ]]; then
+      pr_json="$candidate"
+      break
+    fi
+  done
+  if [[ "$pr_json" == "[]" ]]; then
+    echo "::warning::No PR found for ${branch} on ${UPSTREAM_REPO}"
   fi
 
   pr_state=$(echo "$pr_json" | jq -r '.[0].state // "NONE"')
