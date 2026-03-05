@@ -216,6 +216,15 @@ jobs:
             /tmp/sorted_branches.txt contains ALL active patch branches in topological
             order (one per line) — use this for rebuilding ${{ inputs.fork_main }}.
 
+            ## Safety rules
+
+            - **Never push to ${{ inputs.fork_main }} unless EVERY patch resolved cleanly.**
+              If any patch cannot be confidently resolved, ABORT: write the summary and exit 1.
+            - A patch is only "superseded" if upstream has FULLY accomplished the goal
+              described in the PR body. Partial overlap is NOT superseded — resolve the
+              conflict to preserve the patch's remaining intent.
+            - When in doubt, ABORT. A failed workflow is always better than a wrong merge.
+
             ## Your task
 
             For each entry in /tmp/conflicts.json:
@@ -224,8 +233,9 @@ jobs:
             2. Check what changed in upstream that caused the conflict:
                `git log --oneline upstream/${{ inputs.upstream_branch }} -20`
                `git diff <parent> upstream/${{ inputs.upstream_branch }} -- <conflicting_files>`
-            3. DECISION: Has upstream already addressed the same problem?
-               - If YES (equivalent fix landed upstream): close the PR and archive the branch
+            3. DECISION — pick exactly one:
+
+               **SUPERSEDED** — upstream has fully accomplished the PR's goal:
                  a. `gh pr comment <number> --repo ${{ inputs.upstream_repo }} --body "..."`
                     (may fail if app is not installed on upstream — log a warning and continue)
                  b. `gh pr close <number> --repo ${{ inputs.upstream_repo }}`
@@ -233,16 +243,21 @@ jobs:
                  c. `git push origin <branch>:refs/heads/archived/<suffix>`
                  d. `git push origin --delete <branch>`
                  e. Remove the branch from /tmp/sorted_branches.txt
-               - If NO (genuine conflict, both changes should coexist):
+
+               **RESOLVE** — genuine conflict, both changes should coexist:
                  a. `git checkout <branch>`
                  b. `git rebase <parent>` — conflict markers will appear
-                 c. Resolve each file: preserve upstream's approach, adapt patch on top
-                    when in doubt. Use the PR description as the source of truth for intent.
+                 c. Resolve each file: preserve upstream's approach, adapt patch on top.
+                    Use the PR description as the source of truth for intent.
                  d. `git add <resolved files>`
                  e. `git rebase --continue`  (repeat c–e if multi-commit rebase)
                  f. `git push --force-with-lease origin <branch>`
 
-            After handling all conflicts:
+               **ABORT** — you are not confident in either decision:
+                 a. Write the summary (step 5) explaining what you found
+                 b. `exit 1` — do NOT rebuild or push ${{ inputs.fork_main }}
+
+            After handling all conflicts (only if none aborted):
 
             4. Rebuild ${{ inputs.fork_main }} using squash merges (one commit per patch):
                a. `git checkout ${{ inputs.fork_main }}`
@@ -250,12 +265,13 @@ jobs:
                c. For each branch in /tmp/sorted_branches.txt (skip archived ones):
                   - `git merge --squash <branch>`
                   - If clean: `git commit -m "<pr_title> (#<pr_num>)\n\nUpstream PR: <pr_url>"`
-                  - If conflict: resolve files, `git add`, then commit with the same message format
+                  - If conflict: resolve files, `git add`, then commit with same message format
                d. `git push --force origin ${{ inputs.fork_main }}`
 
             5. Write a markdown summary to /tmp/claude_summary.md:
                - Branches resolved cleanly (list)
-               - Branches closed as superseded (list + reason, if any)
+               - Branches closed as superseded (list + reason)
+               - Branches that caused an abort (list + what was unclear)
                - Any remaining issues
 
       # ── Summary ───────────────────────────────────────────────────────────
