@@ -183,6 +183,9 @@ jobs:
           ssh_signing_key: ${{ secrets.app_private_key }}
           claude_args: --max-turns 80
           show_full_output: true
+          # Allow Claude to run git/gh commands, read/write files for conflict
+          # resolution and fork/main rebuild.
+          settings: '{"permissions":{"allow":["Bash(git *)","Bash(gh *)","Bash(cat *)","Bash(sed *)","Bash(grep *)","Bash(wc *)","Read","Write","Edit"]}}'
           prompt: |
             You are maintaining a patch stack fork of ${{ inputs.upstream_repo }}.
 
