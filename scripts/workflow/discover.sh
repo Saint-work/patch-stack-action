@@ -10,13 +10,15 @@
 source "$(dirname "$0")/lib.sh"
 
 topo_sort() {
-  # Repeatedly emit branches whose parent has already been emitted
+  # Emit branches level by level: within each level, order by PR number
+  # (lowest first). Dependency ordering is always preserved — a child
+  # never appears before its parent regardless of PR number.
   local -a active_branches=("$@") remaining=("$@") sorted=()
   local -a emitted=("$FORK_UPSTREAM_BRANCH")
   local pass=0 max=$(( ${#remaining[@]} + 1 ))
   while [[ ${#remaining[@]} -gt 0 && $pass -lt $max ]]; do
     (( pass++ )) || true
-    local -a next=()
+    local -a ready=() next=()
     for b in "${remaining[@]}"; do
       local parent
       parent=$(get_effective_parent "$b" "${active_branches[@]}")
@@ -25,12 +27,26 @@ topo_sort() {
         [[ "$e" == "$parent" ]] && { found=true; break; }
       done
       if $found; then
-        sorted+=("$b")
-        emitted+=("$b")
+        ready+=("$b")
       else
         next+=("$b")
       fi
     done
+    # Sort ready branches by PR number (no-PR branches go last)
+    if [[ ${#ready[@]} -gt 1 ]]; then
+      local -a pr_sorted=()
+      mapfile -t pr_sorted < <(
+        for b in "${ready[@]}"; do
+          local safe="${b//\//_}"
+          local num
+          num=$(cat "/tmp/meta_num_${safe}" 2>/dev/null || echo "")
+          printf '%s\t%s\n' "${num:-999999}" "$b"
+        done | sort -t$'\t' -k1,1n | cut -f2
+      )
+      ready=("${pr_sorted[@]}")
+    fi
+    sorted+=("${ready[@]}")
+    emitted+=("${ready[@]}")
     remaining=("${next[@]+"${next[@]}"}")
   done
   # Any remaining have broken deps — append with a warning
