@@ -110,6 +110,7 @@ A GitHub App token is required for the fork (not `GITHUB_TOKEN`) for three reaso
 **Permissions needed:**
 - Contents: Read & Write
 - Pull requests: Read & Write
+- Workflows: Read & Write (required because the upstream mirror branch includes workflow files)
 - Metadata: Read (auto-granted)
 
 **Install the app on:**
