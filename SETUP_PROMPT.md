@@ -64,9 +64,10 @@ Set up a patch-stack fork workflow for this repository.
    > - Merge conflicts during rebase are resolved automatically using Claude Code.
    >
    > **Adding a new patch:**
-   > 1. Create a branch: `git checkout -b patch/my-feature upstream`
+   > 1. Create a branch: `git checkout -b patch/my-feature origin/upstream`
    > 2. Make your changes and push: `git push origin patch/my-feature`
-   > 3. The nightly sync will rebase it onto upstream, create a PR, and squash-merge it into `main`.
+   > 3. Create a local PR: `gh pr create --head patch/my-feature --base upstream`
+   > 4. The nightly sync will rebase it onto upstream and squash-merge it into `main`.
    >
    > **Current patches:** _(none yet)_
    ```
