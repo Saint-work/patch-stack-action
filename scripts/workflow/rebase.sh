@@ -85,17 +85,52 @@ is_patch_generated_commit() {
   return 1
 }
 
+# Build a set of commit SHAs that already exist in upstream history
+# (by patch-id matching). When the fork-local upstream mirror is
+# pinned to a tag older than the previous upstream HEAD, the range
+# FORK_UPSTREAM_BRANCH..FORK_MAIN includes upstream commits that were
+# already on main before the pin. These should not be preserved.
+#
+# Uses `git cherry` which efficiently compares patch-ids between two
+# branches. Commits marked with "-" are already upstream.
+build_upstream_commit_set() {
+  declare -gA _upstream_commits=()
+
+  # git cherry <upstream> <head> <limit>
+  # Lists commits in limit..head, prefixed with - (in upstream) or + (unique)
+  local mark sha
+  while read -r mark sha; do
+    if [[ "$mark" == "-" ]]; then
+      _upstream_commits["$sha"]=1
+    fi
+  done < <(git cherry "upstream/${UPSTREAM_BRANCH}" "$FORK_MAIN" "$FORK_UPSTREAM_BRANCH" 2>/dev/null || true)
+}
+
+is_upstream_commit() {
+  [[ -n "${_upstream_commits[$1]+x}" ]]
+}
+
 collect_preserved_main_commits() {
   : > /tmp/preserved_main_commits.txt
   load_legacy_patch_subjects
+  build_upstream_commit_set
 
-  local commit
+  local commit skipped=0
   while IFS= read -r commit || [[ -n "$commit" ]]; do
     [[ -z "$commit" ]] && continue
-    if ! is_patch_generated_commit "$commit"; then
-      printf '%s\n' "$commit" >> /tmp/preserved_main_commits.txt
+    if is_patch_generated_commit "$commit"; then
+      continue
     fi
+    if is_upstream_commit "$commit"; then
+      (( skipped++ )) || true
+      continue
+    fi
+    printf '%s\n' "$commit" >> /tmp/preserved_main_commits.txt
   done < <(git rev-list --reverse "$FORK_UPSTREAM_BRANCH..$FORK_MAIN")
+
+  if [[ $skipped -gt 0 ]]; then
+    echo "  Skipped ${skipped} upstream commit(s) already in upstream/${UPSTREAM_BRANCH}"
+  fi
 }
 
 replay_preserved_main_commits() {
