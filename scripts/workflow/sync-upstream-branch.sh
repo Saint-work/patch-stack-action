@@ -4,6 +4,7 @@
 #
 # Requires env: DRY_RUN, UPSTREAM_BRANCH, FORK_UPSTREAM_BRANCH
 # Optional env: UPSTREAM_TAG_PATTERN (glob, e.g. "v*")
+#               UPSTREAM_COMMIT_OVERRIDE (full or short SHA)
 # Outputs (via GITHUB_OUTPUT): upstream_tag, upstream_sha
 
 set -euo pipefail
@@ -27,6 +28,23 @@ if [[ -n "${UPSTREAM_TAG_PATTERN:-}" ]]; then
     target_ref="$upstream_tag"
   else
     echo "::warning::No tag matching '${UPSTREAM_TAG_PATTERN}' found on upstream/${UPSTREAM_BRANCH}; falling back to branch HEAD"
+  fi
+fi
+
+# Allow a commit override to skip ahead of the latest tag.  The override
+# expires automatically once a tag is released that contains the commit.
+if [[ -n "${UPSTREAM_COMMIT_OVERRIDE:-}" ]]; then
+  override_sha=$(git rev-parse --verify "${UPSTREAM_COMMIT_OVERRIDE}^{commit}" 2>/dev/null) || {
+    echo "::error::upstream_commit_override '${UPSTREAM_COMMIT_OVERRIDE}' is not a valid commit"
+    exit 1
+  }
+
+  if [[ -n "$upstream_tag" ]] && git merge-base --is-ancestor "$override_sha" "$upstream_tag" 2>/dev/null; then
+    echo "Override commit ${UPSTREAM_COMMIT_OVERRIDE} is already contained in ${upstream_tag}; ignoring override"
+  else
+    echo "Applying commit override: ${UPSTREAM_COMMIT_OVERRIDE} (${override_sha})"
+    target_ref="$override_sha"
+    upstream_tag="${upstream_tag:+${upstream_tag}+}${override_sha:0:12}"
   fi
 fi
 

@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ''
+      upstream_commit_override:
+        description: 'Skip ahead to this commit SHA instead of the latest tag. Automatically ignored once a tag containing this commit is released.'
+        required: false
+        type: string
+        default: ''
       dry_run:
         description: 'Dry run — no pushes or PR mutations'
         type: boolean
@@ -62,6 +67,11 @@ on:
         default: 'upstream'
       upstream_tag_pattern:
         description: 'Pin upstream to latest tag matching this glob (e.g. v*). Excludes pre-release tags containing a hyphen suffix. Leave empty to track branch HEAD.'
+        required: false
+        type: string
+        default: ''
+      upstream_commit_override:
+        description: 'Skip ahead to this commit SHA instead of the latest tag. Automatically ignored once a tag containing this commit is released.'
         required: false
         type: string
         default: ''
@@ -202,6 +212,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
           UPSTREAM_TAG_PATTERN: ${{ inputs.upstream_tag_pattern }}
+          UPSTREAM_COMMIT_OVERRIDE: ${{ inputs.upstream_commit_override }}
           FORK_UPSTREAM_BRANCH: ${{ inputs.fork_upstream_branch }}
         run: bash .patch-stack-action/scripts/workflow/sync-upstream-branch.sh
 
