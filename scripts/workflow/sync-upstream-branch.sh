@@ -34,6 +34,13 @@ fi
 # Allow a commit override to skip ahead of the latest tag.  The override
 # expires automatically once a tag is released that contains the commit.
 if [[ -n "${UPSTREAM_COMMIT_OVERRIDE:-}" ]]; then
+  # The commit may not be reachable from the branch/tags already fetched
+  # (e.g. it lives on a topic branch).  Fetch it explicitly first.
+  if ! git rev-parse --verify "${UPSTREAM_COMMIT_OVERRIDE}^{commit}" &>/dev/null; then
+    echo "Fetching override commit ${UPSTREAM_COMMIT_OVERRIDE} from upstream..."
+    git fetch upstream "${UPSTREAM_COMMIT_OVERRIDE}" --quiet 2>/dev/null || true
+  fi
+
   override_sha=$(git rev-parse --verify "${UPSTREAM_COMMIT_OVERRIDE}^{commit}" 2>/dev/null) || {
     echo "::error::upstream_commit_override '${UPSTREAM_COMMIT_OVERRIDE}' is not a valid commit"
     exit 1
