@@ -173,6 +173,7 @@ jobs:
           UPSTREAM_GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          UPSTREAM_TAG_PATTERN: ${{ inputs.upstream_tag_pattern }}
         run: |
           set -euo pipefail
 
@@ -186,7 +187,11 @@ jobs:
           git remote add upstream "${upstream_url}" 2>/dev/null \
             || git remote set-url upstream "${upstream_url}"
 
-          git fetch upstream "$UPSTREAM_BRANCH" --tags --quiet
+          git fetch upstream "$UPSTREAM_BRANCH" --quiet
+          # Fetch tags only when tag pinning is configured
+          if [[ -n "${UPSTREAM_TAG_PATTERN}" ]]; then
+            git fetch upstream --tags --quiet
+          fi
           # Fetch all patch/* branches from origin into local tracking branches
           git fetch origin '+refs/heads/patch/*:refs/heads/patch/*' --quiet 2>/dev/null || true
 
