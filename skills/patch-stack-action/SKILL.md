@@ -236,13 +236,67 @@ git push origin <FORK_BASE_BRANCH>
 fork: set up patch-stack fork workflow
 ```
 
-### Step 7: Manual setup reminder
+### Step 7: Create and install the GitHub App
 
-Remind the user:
+The sync workflow needs a GitHub App to push branches and manage PRs. Walk the user through this:
 
-1. **Create a GitHub App** at https://github.com/settings/apps/new with Contents (R&W), Pull requests (R&W), Metadata (Read-only)
-2. **Make the app public** if the fork is in a different org than the app owner
-3. **Install the app** on the fork repo
-4. **Add repo secrets**: `PATCH_STACK_APP_ID`, `PATCH_STACK_APP_PRIVATE_KEY`
-5. **Generate Claude Code token**: `claude setup-token` and add as `CLAUDE_CODE_OAUTH_TOKEN`
-6. **Trigger the first sync**: `gh workflow run patch-stack-sync.yml`
+#### Create the app
+
+1. Go to **https://github.com/settings/apps/new**
+2. **Name**: something like `patch-stack-bot` (must be globally unique)
+3. **Homepage URL**: `https://github.com/DJRHails/patch-stack-action`
+4. **Permissions** (Repository):
+   - **Contents**: Read & Write (push branches, create commits)
+   - **Pull requests**: Read & Write (create/update/close PRs)
+   - **Metadata**: Read-only (required by GitHub)
+5. Uncheck "Active" under Webhooks (not needed)
+6. Select "Only on this account" under installation access
+7. Click "Create GitHub App"
+
+#### Note the App ID
+
+After creation, the **App ID** is shown at the top of the app's General settings page. Save this for the `PATCH_STACK_APP_ID` secret.
+
+#### Generate a private key
+
+On the same General settings page, scroll to "Private keys" and click **"Generate a private key"**. A `.pem` file downloads. The contents of this file are the `PATCH_STACK_APP_PRIVATE_KEY` secret.
+
+#### Make it public (if fork is in a different org)
+
+If the fork repo lives in a different GitHub org/account than where the app was created:
+
+1. Go to the app's **Advanced** settings
+2. Click **"Make this GitHub App public"**
+
+This allows other orgs to install it.
+
+#### Install the app on the fork repo
+
+1. Go to the app's **"Install App"** page (sidebar)
+2. Click **Install** next to the org/account that owns the fork
+3. Select **"Only select repositories"** and pick the fork repo
+4. Click **Install**
+
+If the fork is in a different org, have an org admin visit `https://github.com/apps/<app-name>` and click Install.
+
+#### Add repo secrets
+
+Go to the fork repo's **Settings > Secrets and variables > Actions** and add:
+
+| Secret | Value |
+| --- | --- |
+| `PATCH_STACK_APP_ID` | The App ID from the app's General page |
+| `PATCH_STACK_APP_PRIVATE_KEY` | The full contents of the downloaded `.pem` file |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token` locally and paste the output |
+
+#### Trigger the first sync
+
+```bash
+gh workflow run patch-stack-sync.yml
+```
+
+Watch the run to confirm it completes successfully:
+
+```bash
+gh run list --workflow=patch-stack-sync.yml --limit 1
+```
