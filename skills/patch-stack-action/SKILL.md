@@ -1,5 +1,5 @@
 ---
-name: patch-stack-setup
+name: patch-stack-action
 description: Manage patch-stack forks — setup, daily patch editing, and sync workflows. Use when a repo references DJRHails/patch-stack-action, has commits prefixed "patch-stack:", or has patch/* branches.
 license: MIT
 metadata:

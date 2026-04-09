@@ -1,0 +1,20 @@
+{
+  "name": "patch-stack-action-demo-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "remotion render src/index.ts OpenClawForkPromo out/patch-stack-openclaw-demo.mp4 --codec h264"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.434",
+    "@remotion/google-fonts": "4.0.434",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.434"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "typescript": "5.9.2"
+  }
+}
