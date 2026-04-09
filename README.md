@@ -61,7 +61,13 @@ When generating squash commit messages on `fork/main`, the workflow prefers meta
 
 ## Quick start with AI
 
-Copy the prompt from [`SETUP_PROMPT.md`](SETUP_PROMPT.md) into a Claude Code session at the root of your fork. It will create the workflow file, add a README fork note, document the workflow in CLAUDE.md, and set up the upstream mirror branch. You still need to create the GitHub App and add secrets manually (instructions included in the prompt output).
+Install the setup skill in your fork repo and run it:
+
+```bash
+npx skills add DJRHails/patch-stack-action
+```
+
+This installs a `patch-stack-setup` skill that creates the workflow file, adds a README fork note, documents the workflow in CLAUDE.md, sets up the upstream mirror branch, and walks you through the required GitHub App and secrets setup.
 
 ## Usage
 
