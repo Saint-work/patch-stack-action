@@ -281,7 +281,7 @@ jobs:
         with:
           github_token: ${{ steps.fork-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
-          claude_args: --max-turns 120
+          claude_args: --max-turns 150
           show_full_output: true
           # Allow Claude to run git/gh commands, read/write files for conflict
           # resolution and fork/main rebuild.
