@@ -2,9 +2,10 @@
 # Maintain the fork's base branch that mirrors upstream/<branch>, optionally
 # pinned to the latest tag matching a glob pattern.
 #
-# Requires env: DRY_RUN, UPSTREAM_BRANCH, FORK_BASE_BRANCH
+# Requires env: DRY_RUN, UPSTREAM_BRANCH, FORK_BASE_BRANCH, UPSTREAM_REPO
 # Optional env: UPSTREAM_TAG_PATTERN (glob, e.g. "v*")
 #               UPSTREAM_COMMIT_OVERRIDE (full or short SHA)
+#               UPSTREAM_GH_TOKEN (for authenticated GitHub API calls)
 # Outputs (via GITHUB_OUTPUT): upstream_tag, upstream_sha
 
 set -euo pipefail
@@ -13,21 +14,23 @@ target_ref="upstream/${UPSTREAM_BRANCH}"
 upstream_tag=""
 
 if [[ -n "${UPSTREAM_TAG_PATTERN:-}" ]]; then
-  # Find the latest stable tag (exclude pre-release suffixes like -beta.1, -rc2)
-  # reachable from the upstream branch, sorted by version.
+  # Use the GitHub Releases API to find the latest stable release tag.
+  # This handles repos that cut releases from release branches (where
+  # the tag commit is not an ancestor of main).
+  gh_token="${UPSTREAM_GH_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -n "$gh_token" ]]; then
+    export GH_TOKEN="$gh_token"
+  fi
+
   upstream_tag=$(
-    git tag --list "$UPSTREAM_TAG_PATTERN" \
-      --sort=-version:refname \
-      --merged "upstream/${UPSTREAM_BRANCH}" \
-    | grep -v -E -- '-' \
-    | head -1
+    gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name' 2>/dev/null
   ) || true
 
   if [[ -n "$upstream_tag" ]]; then
-    echo "Pinning to tag: ${upstream_tag}"
+    echo "Pinning to tag: ${upstream_tag} (via GitHub Releases API)"
     target_ref="$upstream_tag"
   else
-    echo "::warning::No tag matching '${UPSTREAM_TAG_PATTERN}' found on upstream/${UPSTREAM_BRANCH}; falling back to branch HEAD"
+    echo "::warning::GitHub Releases API returned no latest release for ${UPSTREAM_REPO}; falling back to branch HEAD"
   fi
 fi
 
