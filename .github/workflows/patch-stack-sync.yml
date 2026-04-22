@@ -215,6 +215,7 @@ jobs:
           UPSTREAM_TAG_PATTERN: ${{ inputs.upstream_tag_pattern }}
           UPSTREAM_COMMIT_OVERRIDE: ${{ inputs.upstream_commit_override }}
           UPSTREAM_GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
+          GH_TOKEN: ${{ steps.fork-token.outputs.token }}
           FORK_BASE_BRANCH: ${{ inputs.fork_base_branch }}
         run: bash .patch-stack-action/scripts/workflow/sync-upstream-branch.sh
 
