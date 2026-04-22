@@ -158,7 +158,7 @@ jobs:
       - name: Checkout patch-stack-action scripts
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
-          repository: DJRHails/patch-stack-action
+          repository: Saint-work/patch-stack-action
           ref: ${{ steps.repos.outputs.action_ref }}
           path: .patch-stack-action
           sparse-checkout: scripts/workflow
@@ -210,9 +210,11 @@ jobs:
         shell: bash
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
           UPSTREAM_TAG_PATTERN: ${{ inputs.upstream_tag_pattern }}
           UPSTREAM_COMMIT_OVERRIDE: ${{ inputs.upstream_commit_override }}
+          UPSTREAM_GH_TOKEN: ${{ steps.upstream-token.outputs.token }}
           FORK_BASE_BRANCH: ${{ inputs.fork_base_branch }}
         run: bash .patch-stack-action/scripts/workflow/sync-upstream-branch.sh
 
